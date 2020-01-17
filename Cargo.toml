@@ -19,17 +19,17 @@ runtime-tokio = "0.3.0-alpha.6"
   package = "muta-protocol"
 
   [dependencies.asset]
-  git = "https://github.com/nervosnetwork/muta"
-  branch = "master"
+  path = "services/asset"
 
   [dependencies.metadata]
   path = "services/metadata"
-
-  [dependencies.hello]
-  path = "services/hello"
 
   [dependencies.dex]
   path = "services/dex"
 
 [workspace]
-members = [ "services/metadata", "services/hello", "services/dex" ]
+members = [
+  "services/metadata",
+  "services/dex",
+  "services/asset"
+]

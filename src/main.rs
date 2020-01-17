@@ -14,6 +14,7 @@ impl ServiceMapping for DefaultServiceMapping {
     ) -> ProtocolResult<Box<dyn Service>> {
         let service = match name {
             "asset" => Box::new(asset::AssetService::new(sdk)?) as Box<dyn Service>,
+            "dex" => Box::new(dex::DexService::new(sdk)?) as Box<dyn Service>,
             "metadata" => Box::new(metadata::MetadataService::new(sdk)?) as Box<dyn Service>,
             _ => {
                 return Err(MappingError::NotFoundService {
@@ -27,7 +28,7 @@ impl ServiceMapping for DefaultServiceMapping {
     }
 
     fn list_service_name(&self) -> Vec<String> {
-        vec!["asset".to_owned(), "metadata".to_owned()]
+        vec!["asset".to_owned(), "dex".to_owned(), "metadata".to_owned()]
     }
 }
 

@@ -3,4 +3,8 @@ prevhash = "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
 
 [[services]]
 name = "asset"
-payload = '{ "id": "f56924db538e77bb5951eb5ff0d02b88983c49c45eea30e8ae3e7234b311436c", "name": "MutaToken", "symbol": "MT", "supply": 320000011, "issuer": "f8389d774afdad8755ef8e629e5a154fddc6325a" }'
+payload = '{ "id": "f56924db538e77bb5951eb5ff0d02b88983c49c45eea30e8ae3e7234b311436c", "name": "MutaToken", "symbol": "MT", "supply": 100000000, "issuer": "f8389d774afdad8755ef8e629e5a154fddc6325a" }'
+
+[[services]]
+name = "dex"
+payload = '{ "valid_limit": 999999 }'

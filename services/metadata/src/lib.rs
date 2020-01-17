@@ -1,5 +1,5 @@
 use binding_macro::{cycles, service};
-use protocol::traits::ServiceSDK;
+use protocol::traits::{ServiceSDK, ExecutorParams};
 use protocol::types::{Metadata, ServiceContext, METADATA_KEY};
 use protocol::ProtocolResult;
 
