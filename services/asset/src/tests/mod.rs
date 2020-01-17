@@ -14,7 +14,7 @@ use protocol::types::{
 };
 use protocol::ProtocolResult;
 
-use crate::types::{CreateAssetPayload, GetAssetPayload, GetBalancePayload, TransferPayload};
+use crate::types::{CreateAssetPayload, GetAssetPayload, GetBalancePayload, TransferPayload, ModifyBalancePayload};
 use crate::AssetService;
 
 #[test]
@@ -49,13 +49,40 @@ fn test_transfer() {
             asset_id: asset.id.clone(),
         })
         .unwrap();
-    println!()
+    println!("sender:{:?}", &balance_res);
 
-    let context = mock_context(cycles_limit, to_address);
+    let rev_context = mock_context(cycles_limit, to_address.clone());
     let balance_res = service
-        .get_balance(context, GetBalancePayload { asset_id: asset.id })
+        .get_balance(rev_context.clone(), GetBalancePayload { asset_id: asset.id.clone() })
         .unwrap();
-    assert_eq!(balance_res.balance, 1024);
+    println!("reciever:{:?}", &balance_res);
+
+
+    service
+        .lock(rev_context.clone(), ModifyBalancePayload {
+            asset_id: asset.id.clone(),
+            user:       to_address.clone(),
+            value:    24,
+        })
+        .unwrap();
+
+    let balance_res = service
+        .get_balance(rev_context.clone(), GetBalancePayload { asset_id: asset.id.clone() })
+        .unwrap();
+    println!("reciever:{:?}", &balance_res);
+
+    service
+        .unlock(rev_context.clone(), ModifyBalancePayload {
+            asset_id: asset.id.clone(),
+            user:       to_address.clone(),
+            value:    24,
+        })
+        .unwrap();
+
+    let balance_res = service
+        .get_balance(rev_context.clone(), GetBalancePayload { asset_id: asset.id.clone() })
+        .unwrap();
+    println!("reciever:{:?}", &balance_res);
 }
 
 fn new_asset_service() -> AssetService<
