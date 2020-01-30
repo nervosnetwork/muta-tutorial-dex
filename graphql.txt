@@ -1,0 +1,161 @@
+f8389d774afdad8755ef8e629e5a154fddc6325a
+0x45c56be699dca666191ad3446897e0f480da234da896270202514a0e1a587c3f
+f56924db538e77bb5951eb5ff0d02b88983c49c45eea30e8ae3e7234b311436c
+
+016cbd9ee47a255a6f68882918dcdd9e14e6bee1
+0x30269d47fcf602b889243722b666881bf953f1213228363d34cf04ddcd51dfd2
+60116169e5aef546e0dafc928e32095baecd89acdfa98a8f109111ead668b66e
+
+// get receipt
+query{
+  getReceipt(txHash: "ccaafd5ef8d5e8ea18822c3c614c5fcc385ecf7d7d93f1a98e6235876b2c76d8"){
+    epochId,
+    response{
+      ret,
+      isError
+    }
+  }
+}
+
+// create asset
+mutation {
+  unsafeSendTransaction(inputRaw: {
+    serviceName:"asset",
+    method:"create_asset",
+    payload:"{\"name\":\"shushu\",\"symbol\":\"SHSH\",\"supply\":100000000}",
+    timeout:"0x33e0",
+    nonce:"0x9db2d7efe2b61a88827e4836e2775d913a442ed2f9096ca1233e479607c27cf7",
+    chainId:"0x7d2ed3ce783d64ebf59f17c509e91eaaa1481cd74bfb24474e1da40166e4e75a",
+    cyclesPrice:"0x9999",
+    cyclesLimit:"0x9999"
+  }, inputPrivkey: "0x30269d47fcf602b889243722b666881bf953f1213228363d34cf04ddcd51dfd2"
+  )
+}
+
+// get_balance SHSH
+query{
+  queryService(
+  epochId: "144"
+  cyclesLimit: "999999999"
+  cyclesPrice: "1"
+  caller: "016cbd9ee47a255a6f68882918dcdd9e14e6bee1"
+  serviceName: "asset"
+  method: "get_balance"
+  payload: "{\"asset_id\": \"60116169e5aef546e0dafc928e32095baecd89acdfa98a8f109111ead668b66e\"}"
+  ){
+    ret,
+    isError
+  }
+}
+
+// get_balance MT
+query{
+  queryService(
+  epochId: "4"
+  cyclesLimit: "999999999"
+  cyclesPrice: "1"
+  caller: "f8389d774afdad8755ef8e629e5a154fddc6325a"
+  serviceName: "asset"
+  method: "get_balance"
+  payload: "{\"asset_id\": \"f56924db538e77bb5951eb5ff0d02b88983c49c45eea30e8ae3e7234b311436c\"}"
+  ){
+    ret,
+    isError
+  }
+}
+
+/** add trade into dex **/
+mutation {
+  unsafeSendTransaction(inputRaw: {
+    serviceName:"dex",
+    method:"add_trade",
+    payload:"{\"base_asset\":\"f56924db538e77bb5951eb5ff0d02b88983c49c45eea30e8ae3e7234b311436c\",\"counter_party\":\"60116169e5aef546e0dafc928e32095baecd89acdfa98a8f109111ead668b66e\"}",
+    timeout:"0x33e0",
+    nonce:"0x9db2d7efe2b61a88827e4836e2775d913a442ed2f9096ca1233e479607c27cf7",
+    chainId:"0x7d2ed3ce783d64ebf59f17c509e91eaaa1481cd74bfb24474e1da40166e4e75a",
+    cyclesPrice:"0x9999",
+    cyclesLimit:"0x9999",
+    }, inputPrivkey: "0x30269d47fcf602b889243722b666881bf953f1213228363d34cf04ddcd51dfd2"
+  )
+}
+
+7804cf4b8f55a796bfd2eaac496f6d12502011f98f73575685e49ef16bb8a7fe
+// dex: get_trades
+query{
+  queryService(
+  epochId: "4"
+  cyclesLimit: "999999999"
+  cyclesPrice: "1"
+  caller: "f8389d774afdad8755ef8e629e5a154fddc6325a"
+  serviceName: "dex"
+  method: "get_trades"
+  payload: ""
+  ){
+    ret,
+    isError
+  }
+}
+
+/** dex send order: buy SHSH **/
+mutation {
+  unsafeSendTransaction(inputRaw: {
+    serviceName:"dex",
+    method:"order",
+    payload:"{\"kind\":\"Buy\",\"price\":4, \"amount\":50, \"expiry\":99999}",
+    timeout:"0x33e0",
+    nonce:"0x9db2d7efe2b61a88827e4836e2775d913a442ed2f9096ca1233e479607c27cf7",
+    chainId:"0x7d2ed3ce783d64ebf59f17c509e91eaaa1481cd74bfb24474e1da40166e4e75a",
+    cyclesPrice:"0x9999",
+    cyclesLimit:"0x9999",
+    }, inputPrivkey: "0x45c56be699dca666191ad3446897e0f480da234da896270202514a0e1a587c3f"
+  )
+}
+
+/** dex send order: sell SHSH **/
+mutation {
+  unsafeSendTransaction(inputRaw: {
+    serviceName:"dex",
+    method:"order",
+    payload:"{\"kind\":\"Sell\",\"price\":2, \"amount\":100, \"expiry\":99999}",
+    timeout:"0x33e0",
+    nonce:"0x9db2d7efe2b61a88827e4836e2775d913a442ed2f9096ca1233e479607c27cf7",
+    chainId:"0x7d2ed3ce783d64ebf59f17c509e91eaaa1481cd74bfb24474e1da40166e4e75a",
+    cyclesPrice:"0x9999",
+    cyclesLimit:"0x9999",
+    }, inputPrivkey: "0x30269d47fcf602b889243722b666881bf953f1213228363d34cf04ddcd51dfd2"
+  )
+}
+
+// dex: get buy order
+query{
+  queryService(
+  epochId: "288"
+  cyclesLimit: "999999999"
+  cyclesPrice: "1"
+  caller: "f8389d774afdad8755ef8e629e5a154fddc6325a"
+  serviceName: "dex"
+  method: "get_order"
+  payload: "{\"tx_hash\": \"fb4e04244ab0194fa3afa85827108a205fc0946dc0c1d70053df8b1d18a312b0\"}"
+  ){
+    ret,
+    isError
+  }
+}
+
+// dex: get sell order
+query{
+  queryService(
+  epochId: "288"
+  cyclesLimit: "999999999"
+  cyclesPrice: "1"
+  caller: "f8389d774afdad8755ef8e629e5a154fddc6325a"
+  serviceName: "dex"
+  method: "get_order"
+  payload: "{\"tx_hash\": \"3ca6d92f7f1d58d69e12818bcf14b37d6f942b02c63e7ec5ab02b3a9b1f2cfbf\"}"
+  ){
+    ret,
+    isError
+  }
+}
+
+
