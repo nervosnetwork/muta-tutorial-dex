@@ -133,7 +133,9 @@ impl<SDK: ServiceSDK> AssetService<SDK> {
         balance.current = balance.current - payload.value;
         balance.locked = balance.locked + payload.value;
 
-        self.sdk.set_account_value(&payload.user, payload.asset_id, balance)
+        self.sdk.set_account_value(&payload.user, payload.asset_id, balance)?;
+
+        ctx.emit_event("lock asset succeed".to_owned())
     }
 
     #[cycles(210_00)]
@@ -153,7 +155,9 @@ impl<SDK: ServiceSDK> AssetService<SDK> {
         balance.current = balance.current + payload.value;
         balance.locked = balance.locked - payload.value;
 
-        self.sdk.set_account_value(&payload.user, payload.asset_id, balance)
+        self.sdk.set_account_value(&payload.user, payload.asset_id, balance)?;
+
+        ctx.emit_event("unlock asset succeed".to_owned())
     }
 
     #[cycles(210_00)]
@@ -172,7 +176,9 @@ impl<SDK: ServiceSDK> AssetService<SDK> {
 
         balance.current = balance.current + payload.value;
 
-        self.sdk.set_account_value(&payload.user, payload.asset_id, balance)
+        self.sdk.set_account_value(&payload.user, payload.asset_id, balance)?;
+
+        ctx.emit_event("add asset succeed".to_owned())
     }
 
     #[cycles(210_00)]
@@ -198,7 +204,9 @@ impl<SDK: ServiceSDK> AssetService<SDK> {
 
         balance.current = balance.current - payload.value;
 
-        self.sdk.set_account_value(&payload.user, payload.asset_id, balance)
+        self.sdk.set_account_value(&payload.user, payload.asset_id, balance)?;
+
+        ctx.emit_event("sub asset succeed".to_owned())
     }
 
     #[cycles(210_00)]

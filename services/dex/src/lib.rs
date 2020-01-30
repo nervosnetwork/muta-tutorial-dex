@@ -62,6 +62,8 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
     fn add_trade(&mut self, ctx: ServiceContext, payload: Trade) -> ProtocolResult<Trade> {
         self.trades.push(payload.clone())?;
 
+        ctx.emit_event("add trade succeed".to_owned())?;
+
         Ok(payload)
     }
 
@@ -69,7 +71,7 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
     fn get_trades(&self, _ctx: ServiceContext) -> ProtocolResult<GetTradesResponse> {
         let mut trades = Vec::<Trade>::new();
         for (_, trade) in self.trades.iter() {
-            &trades.push(trade);
+            trades.push(trade);
         }
 
         Ok(GetTradesResponse{
@@ -123,7 +125,21 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
             }
         };
 
-        Ok(())
+        ctx.emit_event("send order succeed".to_owned())
+    }
+
+    #[cycles(210_00)]
+    #[read]
+    fn get_order(&self, ctx: ServiceContext, payload: GetOrderPayload) -> ProtocolResult<GetOrderResponse> {
+        if let Ok(order) = self.buy_orders.get(&payload.tx_hash) {
+            return Ok(GetOrderResponse::from_order(&order, DealStatus::Dealing));
+        } else if let Ok(order) = self.sell_orders.get(&payload.tx_hash) {
+            return Ok(GetOrderResponse::from_order(&order, DealStatus::Dealing));
+        } else if let Ok(order) = self.history_orders.get(&payload.tx_hash) {
+            return Ok(GetOrderResponse::from_order(&order, DealStatus::Dealt));
+        }
+
+        Err(DexError::NotFound.into())
     }
 
     #[hook_after]
@@ -155,66 +171,78 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
             }
             let deal_price = (current_buy.price + current_sell.price) / 2;
 
-            if current_buy.amount < current_sell.amount {
-                let next_sell = self.settle_buyer(deal_price, current_buy.clone(), current_sell.clone())?;
+            let buy_left = match current_buy.status {
+                OrderStatus::Fresh(_) => current_buy.amount,
+                OrderStatus::Partial(v) => current_buy.amount - v,
+                OrderStatus::Full => unreachable!()
+            };
+
+            let sell_left = match current_sell.status {
+                OrderStatus::Fresh(_) => current_sell.amount,
+                OrderStatus::Partial(v) => current_sell.amount - v,
+                OrderStatus::Full => unreachable!()
+            };
+
+            if buy_left < sell_left {
+                let next_sell = self.settle_buyer(deal_price, buy_left, current_buy.clone(), current_sell.clone())?;
                 sell_arr.push(next_sell);
-            } else if current_buy.amount > current_sell.amount {
-                let next_buy = self.settle_seller(deal_price, current_buy.clone(), current_sell.clone())?;
+            } else if buy_left > sell_left {
+                let next_buy = self.settle_seller(deal_price, sell_left, current_buy.clone(), current_sell.clone())?;
                 buy_arr.push(next_buy);
             } else {
-                self.settle_both(deal_price, current_buy.clone(), current_sell.clone())?;
+                self.settle_both(deal_price, buy_left, current_buy.clone(), current_sell.clone())?;
             }
         }
 
         Ok(())
     }
 
-    fn settle_buyer(&mut self, deal_price: u64, mut current_buy: Order, mut current_sell: Order) -> ProtocolResult<Order> {
+    fn settle_buyer(&mut self, deal_price: u64, deal_amount: u64, mut current_buy: Order, mut current_sell: Order) -> ProtocolResult<Order> {
         let unlock_buyer = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.base_asset,
             user: current_buy.user.clone(),
-            value: current_buy.amount*current_buy.price,
+            value: deal_amount*current_buy.price,
         };
         self.unlock_asset(unlock_buyer)?;
 
         let add_buyer = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.counter_party,
             user: current_buy.user.clone(),
-            value: current_buy.amount,
+            value: deal_amount,
         };
         self.add_asset(add_buyer)?;
 
         let sub_buyer = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.base_asset,
             user: current_buy.user.clone(),
-            value: current_buy.amount*deal_price,
+            value: deal_amount*deal_price,
         };
         self.sub_asset(sub_buyer)?;
 
         let unlock_seller = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.counter_party,
             user: current_sell.user.clone(),
-            value: current_buy.amount,
+            value: deal_amount,
         };
         self.unlock_asset(unlock_seller)?;
 
         let add_seller = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.base_asset,
             user: current_sell.user.clone(),
-            value: current_buy.amount*deal_price,
+            value: deal_amount*deal_price,
         };
         self.add_asset(add_seller)?;
 
         let sub_seller = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.counter_party,
             user: current_sell.user.clone(),
-            value: current_buy.amount,
+            value: deal_amount,
         };
         self.sub_asset(sub_seller)?;
 
         let settle_deal = Deal{
             price: deal_price,
-            amount: current_buy.amount
+            amount: deal_amount
         };
         current_buy.status = OrderStatus::Full;
         current_buy.deals.push(settle_deal.clone());
@@ -236,52 +264,52 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
         Ok(current_sell)
     }
 
-    fn settle_seller(&mut self, deal_price: u64, mut current_buy: Order, mut current_sell: Order) -> ProtocolResult<Order> {
+    fn settle_seller(&mut self, deal_price: u64, deal_amount: u64, mut current_buy: Order, mut current_sell: Order) -> ProtocolResult<Order> {
         let unlock_seller = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.counter_party,
             user: current_sell.user.clone(),
-            value: current_sell.amount,
+            value: deal_amount,
         };
         self.unlock_asset(unlock_seller)?;
 
         let add_seller = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.base_asset,
             user: current_sell.user.clone(),
-            value: current_sell.amount*deal_price,
+            value: deal_amount*deal_price,
         };
         self.add_asset(add_seller)?;
 
         let sub_seller = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.counter_party,
             user: current_sell.user.clone(),
-            value: current_sell.amount,
+            value: deal_amount,
         };
         self.sub_asset(sub_seller)?;
 
         let unlock_buyer = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.base_asset,
             user: current_buy.user.clone(),
-            value: current_sell.amount*deal_price,
+            value: deal_amount*current_buy.price,
         };
         self.unlock_asset(unlock_buyer)?;
 
         let add_buyer = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.counter_party,
             user: current_buy.user.clone(),
-            value: current_sell.amount,
+            value: deal_amount,
         };
         self.add_asset(add_buyer)?;
 
         let sub_buyer = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.base_asset,
             user: current_buy.user.clone(),
-            value: current_sell.amount*deal_price,
+            value: deal_amount*deal_price,
         };
         self.sub_asset(sub_buyer)?;
 
         let settle_deal = Deal{
             price: deal_price,
-            amount: current_sell.amount
+            amount: deal_amount
         };
         current_sell.status = OrderStatus::Full;
         current_sell.deals.push(settle_deal.clone());
@@ -303,52 +331,52 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
         Ok(current_buy)
     }
 
-    fn settle_both(&mut self, deal_price: u64, mut current_buy: Order, mut current_sell: Order) -> ProtocolResult<()> {
+    fn settle_both(&mut self, deal_price: u64, deal_amount: u64, mut current_buy: Order, mut current_sell: Order) -> ProtocolResult<()> {
         let unlock_seller = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.counter_party,
             user: current_sell.user.clone(),
-            value: current_sell.amount,
+            value: deal_amount,
         };
         self.unlock_asset(unlock_seller)?;
 
         let add_seller = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.base_asset,
             user: current_sell.user.clone(),
-            value: current_sell.amount*deal_price,
+            value: deal_amount*deal_price,
         };
         self.add_asset(add_seller)?;
 
         let sub_seller = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.counter_party,
             user: current_sell.user.clone(),
-            value: current_sell.amount,
+            value: deal_amount,
         };
         self.sub_asset(sub_seller)?;
 
         let unlock_buyer = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.base_asset,
             user: current_buy.user.clone(),
-            value: current_sell.amount*deal_price,
+            value: deal_amount*current_buy.price,
         };
         self.unlock_asset(unlock_buyer)?;
 
         let add_buyer = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.counter_party,
             user: current_buy.user.clone(),
-            value: current_sell.amount,
+            value: deal_amount,
         };
         self.add_asset(add_buyer)?;
 
         let sub_buyer = ModifyAssetPayload{
             asset_id: self.trades.get(0)?.base_asset,
             user: current_buy.user.clone(),
-            value: current_sell.amount*deal_price,
+            value: deal_amount*deal_price,
         };
         self.sub_asset(sub_buyer)?;
 
         let settle_deal = Deal{
             price: deal_price,
-            amount: current_sell.amount
+            amount: deal_amount
         };
         current_sell.status = OrderStatus::Full;
         current_sell.deals.push(settle_deal.clone());
@@ -447,20 +475,6 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
         };
 
         ServiceContext::new(params)
-    }
-
-    #[cycles(210_00)]
-    #[read]
-    fn get_order(&self, ctx: ServiceContext, payload: GetOrderPayload) -> ProtocolResult<GetOrderResponse> {
-        if let Ok(order) = self.buy_orders.get(&payload.tx_hash) {
-            return Ok(GetOrderResponse::from_order(&order, DealStatus::Dealing));
-        } else if let Ok(order) = self.sell_orders.get(&payload.tx_hash) {
-            return Ok(GetOrderResponse::from_order(&order, DealStatus::Dealing));
-        } else if let Ok(order) = self.history_orders.get(&payload.tx_hash) {
-            return Ok(GetOrderResponse::from_order(&order, DealStatus::Dealt));
-        }
-
-        Err(DexError::NotFound.into())
     }
 
     fn remove_expiry_orders(&mut self, current_epoch_id: u64) -> ProtocolResult<()> {

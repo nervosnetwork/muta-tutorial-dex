@@ -10,12 +10,12 @@ runtime = "0.3.0-alpha.7"
 runtime-tokio = "0.3.0-alpha.6"
 
   [dependencies.muta]
-  git = "https://github.com/nervosnetwork/muta"
-  branch = "master"
+  git = "https://github.com/mkxbl/muta.git"
+  branch = "exec-bugfix"
 
   [dependencies.protocol]
-  git = "https://github.com/nervosnetwork/muta"
-  branch = "master"
+  git = "https://github.com/mkxbl/muta.git"
+  branch = "exec-bugfix"
   package = "muta-protocol"
 
   [dependencies.asset]
