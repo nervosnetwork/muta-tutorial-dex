@@ -5,8 +5,8 @@ authors = [ "yes@no.com" ]
 edition = "2018"
 
 [dependencies]
-binding-macro = { git = "https://github.com/mkxbl/muta.git",branch = "exec-bugfix"}
-protocol = { git = "https://github.com/mkxbl/muta.git",branch = "exec-bugfix", package = "muta-protocol" }
+binding-macro = { git = "https://github.com/nervosnetwork/muta", rev = "417bfa85", package = "binding-macro" }
+protocol = { git = "https://github.com/nervosnetwork/muta", rev = "417bfa85", package = "muta-protocol" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -18,4 +18,4 @@ bytes = "0.5"
 [dev-dependencies]
 cita_trie = "2.0"
 async-trait = "0.1"
-framework = { git = "https://github.com/mkxbl/muta.git",branch = "exec-bugfix"}
+framework = { git = "https://github.com/nervosnetwork/muta.git", rev = "417bfa85"}

@@ -1,35 +1,25 @@
 [package]
-name = "muta-chain"
+name = "muta-tutorial-dex"
 version = "0.1.0"
-authors = [ "yejiayu <yejiayu.fe@gmail.com>" ]
+authors = [ "mkxbl <vincent@cryptape.com>" ]
 edition = "2018"
 
 [dependencies]
+muta = { git = "https://github.com/nervosnetwork/muta", rev = "417bfa85" }
+protocol = { git = "https://github.com/nervosnetwork/muta", rev = "417bfa85", package = "muta-protocol" }
+metadata = { git = "https://github.com/nervosnetwork/muta", rev = "417bfa85" }
+
+tokio = { version = "0.2", features = ["macros", "rt-core"]}
 derive_more = "0.15"
 runtime = "0.3.0-alpha.7"
 runtime-tokio = "0.3.0-alpha.6"
 
-  [dependencies.muta]
-  git = "https://github.com/mkxbl/muta.git"
-  branch = "exec-bugfix"
+asset = { path = "services/asset" }
+dex = { path = "services/dex" }
 
-  [dependencies.protocol]
-  git = "https://github.com/mkxbl/muta.git"
-  branch = "exec-bugfix"
-  package = "muta-protocol"
-
-  [dependencies.asset]
-  path = "services/asset"
-
-  [dependencies.metadata]
-  path = "services/metadata"
-
-  [dependencies.dex]
-  path = "services/dex"
 
 [workspace]
 members = [
-  "services/metadata",
   "services/dex",
   "services/asset"
 ]
