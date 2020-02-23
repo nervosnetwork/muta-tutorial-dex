@@ -11,12 +11,9 @@ metadata = { git = "https://github.com/nervosnetwork/muta", rev = "417bfa85" }
 
 tokio = { version = "0.2", features = ["macros", "rt-core"]}
 derive_more = "0.15"
-runtime = "0.3.0-alpha.7"
-runtime-tokio = "0.3.0-alpha.6"
 
 asset = { path = "services/asset" }
 dex = { path = "services/dex" }
-
 
 [workspace]
 members = [

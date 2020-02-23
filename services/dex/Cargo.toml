@@ -5,7 +5,7 @@ authors = [ "yes@no.com" ]
 edition = "2018"
 
 [dependencies]
-binding-macro = { git = "https://github.com/nervosnetwork/muta", rev = "417bfa85", package = "binding-macro" }
+binding-macro = { git = "https://github.com/nervosnetwork/muta", rev = "417bfa85" }
 protocol = { git = "https://github.com/nervosnetwork/muta", rev = "417bfa85", package = "muta-protocol" }
 
 serde = { version = "1.0", features = ["derive"] }

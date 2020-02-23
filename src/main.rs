@@ -32,7 +32,7 @@ impl ServiceMapping for DefaultServiceMapping {
     }
 }
 
-#[runtime::main(runtime_tokio::Tokio)]
+#[tokio::main]
 async fn main() {
     let builder = MutaBuilder::new();
 
