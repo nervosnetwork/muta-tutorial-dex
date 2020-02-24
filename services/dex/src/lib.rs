@@ -57,7 +57,7 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
     }
 
     #[genesis]
-    fn genesis(&mut self, payload: GenesisPayload) -> ProtocolResult<()> {
+    fn init_genesis(&mut self, payload: GenesisPayload) -> ProtocolResult<()> {
         self.validity.set(payload.order_validity)
     }
 
@@ -159,11 +159,10 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
         ctx.emit_event(event_json)
     }
 
-    #[cycles(210_00)]
     #[read]
     fn get_order(
         &self,
-        ctx: ServiceContext,
+        _ctx: ServiceContext,
         payload: GetOrderPayload,
     ) -> ProtocolResult<GetOrderResponse> {
         if let Ok(order) = self.buy_orders.get(&payload.tx_hash) {
@@ -174,11 +173,11 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
             return Ok(GetOrderResponse::from_order(&order, DealStatus::Dealt));
         }
 
-        Err(DexError::NotExisted.into())
+        Err(DexError::OrderNotExisted.into())
     }
 
     #[hook_after]
-    fn deal(&mut self, params: &ExecutorParams) -> ProtocolResult<()> {
+    fn match_and_deal(&mut self, params: &ExecutorParams) -> ProtocolResult<()> {
         self.remove_expiry_orders(params.height)?;
 
         let mut buy_queue = Vec::<Order>::new();
@@ -640,7 +639,7 @@ pub enum DexError {
 
     OrderOverdue,
 
-    NotExisted,
+    OrderNotExisted,
 }
 
 impl std::error::Error for DexError {}
