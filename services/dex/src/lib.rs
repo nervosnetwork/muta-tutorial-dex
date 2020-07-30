@@ -3,20 +3,22 @@ mod tests;
 mod types;
 
 use std::cell::RefCell;
+use std::convert::From;
 use std::rc::Rc;
 
 use bytes::Bytes;
-use derive_more::{Display, From};
+use derive_more::Display;
 
 use binding_macro::{cycles, genesis, hook_after, read, service, write};
-use protocol::traits::{ExecutorParams, ServiceSDK, StoreMap, StoreUint64};
+use protocol::traits::{ExecutorParams, ServiceResponse, ServiceSDK, StoreMap, StoreUint64};
 use protocol::types::{Address, Hash, ServiceContext, ServiceContextParams};
-use protocol::{ProtocolError, ProtocolErrorKind, ProtocolResult};
 
 use crate::types::{
     AddTradePayload, Deal, DealStatus, GenesisPayload, GetOrderPayload, GetOrderResponse,
     GetTradesResponse, ModifyAssetPayload, Order, OrderKind, OrderPayload, OrderStatus, Trade,
 };
+use asset::types::ModifyBalancePayload;
+use asset::AssetFacade;
 
 const ADMISSION_TOKEN: Bytes = Bytes::from_static(b"dex_token");
 const TRADES_KEY: &str = "trades";
@@ -25,50 +27,102 @@ const SELL_ORDERS_KEY: &str = "sell_orders";
 const HISTORY_ORDERS_KEY: &str = "history_orders";
 const VALIDITY_KEY: &str = "validity";
 
-pub struct DexService<SDK: ServiceSDK> {
-    sdk: SDK,
+/*
+call a method which returns ServiceResponse.
+if the return is ok, get the data,
+if the return is error, 'return' it
+ */
+
+macro_rules! call_and_parse_service_response {
+    ($self: expr, $method: ident) => {{
+        let res: ServiceResponse<_> = $self.$method();
+        if res.is_error() {
+            return ServiceResponse::from_error(res.code, res.error_message);
+        } else {
+            res.succeed_data
+        }
+    }};
+    ($self: expr, $method: ident, $payload: expr) => {{
+        let res: ServiceResponse<_> = $self.$method($payload);
+        if res.is_error() {
+            return ServiceResponse::from_error(res.code, res.error_message);
+        } else {
+            res.succeed_data
+        }
+    }};
+}
+
+macro_rules! serde_json_string {
+    ($payload: expr) => {
+        match serde_json::to_string(&$payload).map_err(DexError::JsonParse) {
+            Ok(s) => s,
+            Err(e) => return e.into(),
+        };
+    };
+}
+
+macro_rules! check_get_or_return {
+    ($service_response:expr) => {{
+        if $service_response.is_error() {
+            return ServiceResponse::from_error(
+                $service_response.code,
+                $service_response.error_message,
+            );
+        } else {
+            $service_response.succeed_data
+        }
+    }};
+}
+
+pub struct DexService<SDK: ServiceSDK, A> {
+    _sdk: SDK,
     trades: Box<dyn StoreMap<Hash, Trade>>,
     buy_orders: Box<dyn StoreMap<Hash, Order>>,
     sell_orders: Box<dyn StoreMap<Hash, Order>>,
     history_orders: Box<dyn StoreMap<Hash, Order>>,
     validity: Box<dyn StoreUint64>,
+    asset: A,
 }
 
-#[service]
-impl<SDK: 'static + ServiceSDK> DexService<SDK> {
-    pub fn new(mut sdk: SDK) -> ProtocolResult<Self> {
-        let trades: Box<dyn StoreMap<Hash, Trade>> = sdk.alloc_or_recover_map(TRADES_KEY)?;
-        let buy_orders: Box<dyn StoreMap<Hash, Order>> =
-            sdk.alloc_or_recover_map(BUY_ORDERS_KEY)?;
-        let sell_orders: Box<dyn StoreMap<Hash, Order>> =
-            sdk.alloc_or_recover_map(SELL_ORDERS_KEY)?;
-        let history_orders: Box<dyn StoreMap<Hash, Order>> =
-            sdk.alloc_or_recover_map(HISTORY_ORDERS_KEY)?;
-        let validity: Box<dyn StoreUint64> = sdk.alloc_or_recover_uint64(VALIDITY_KEY)?;
+// we done have any facade function for DexService cause no one else will call it
+pub trait DexFacade {}
 
-        Ok(Self {
-            sdk,
+impl<SDK: ServiceSDK, A> DexFacade for DexService<SDK, A> {}
+
+#[service]
+impl<SDK: 'static + ServiceSDK, A: AssetFacade> DexService<SDK, A> {
+    pub fn new(mut sdk: SDK, asset: A) -> Self {
+        let trades: Box<dyn StoreMap<Hash, Trade>> = sdk.alloc_or_recover_map(TRADES_KEY);
+        let buy_orders: Box<dyn StoreMap<Hash, Order>> = sdk.alloc_or_recover_map(BUY_ORDERS_KEY);
+        let sell_orders: Box<dyn StoreMap<Hash, Order>> = sdk.alloc_or_recover_map(SELL_ORDERS_KEY);
+        let history_orders: Box<dyn StoreMap<Hash, Order>> =
+            sdk.alloc_or_recover_map(HISTORY_ORDERS_KEY);
+        let validity: Box<dyn StoreUint64> = sdk.alloc_or_recover_uint64(VALIDITY_KEY);
+
+        Self {
+            _sdk: sdk,
             trades,
             buy_orders,
             sell_orders,
             history_orders,
             validity,
-        })
+            asset,
+        }
     }
 
     #[genesis]
-    fn init_genesis(&mut self, payload: GenesisPayload) -> ProtocolResult<()> {
+    fn init_genesis(&mut self, payload: GenesisPayload) {
         self.validity.set(payload.order_validity)
     }
 
     #[cycles(210_00)]
     #[write]
-    fn add_trade(&mut self, ctx: ServiceContext, payload: AddTradePayload) -> ProtocolResult<()> {
+    fn add_trade(&mut self, ctx: ServiceContext, payload: AddTradePayload) -> ServiceResponse<()> {
         let base_asset = payload.base_asset;
         let counter_party = payload.counter_party;
 
         if base_asset == counter_party {
-            return Err(DexError::IllegalTrade.into());
+            return DexError::IllegalTrade.into();
         }
 
         let trade_id = if base_asset < counter_party {
@@ -77,8 +131,8 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
             Hash::digest(Bytes::from(counter_party.as_hex() + &base_asset.as_hex()))
         };
 
-        if self.trades.contains(&trade_id)? {
-            return Err(DexError::TradeExisted.into());
+        if self.trades.contains(&trade_id) {
+            return DexError::TradeExisted.into();
         }
 
         let trade = Trade {
@@ -87,30 +141,31 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
             counter_party,
         };
 
-        self.trades.insert(trade_id, trade.clone())?;
-        let event_json = serde_json::to_string(&trade).map_err(DexError::JsonParse)?;
-        ctx.emit_event(event_json)
+        self.trades.insert(trade_id, trade.clone());
+        let event_json = serde_json_string!(trade);
+        ctx.emit_event("AddTrade".to_owned(), event_json);
+        ServiceResponse::from_succeed(())
     }
 
     #[read]
-    fn get_trades(&self, _ctx: ServiceContext) -> ProtocolResult<GetTradesResponse> {
+    fn get_trades(&self, _ctx: ServiceContext) -> ServiceResponse<GetTradesResponse> {
         let mut trades = Vec::<Trade>::new();
         for (_, trade) in self.trades.iter() {
             trades.push(trade);
         }
 
-        Ok(GetTradesResponse { trades })
+        ServiceResponse::from_succeed(GetTradesResponse { trades })
     }
 
     #[cycles(210_00)]
     #[write]
-    fn order(&mut self, ctx: ServiceContext, payload: OrderPayload) -> ProtocolResult<()> {
+    fn order(&mut self, ctx: ServiceContext, payload: OrderPayload) -> ServiceResponse<()> {
         let trade_id = payload.trade_id;
-        if !self.trades.contains(&trade_id)? {
-            return Err(DexError::TradeNotExisted.into());
+        if !self.trades.contains(&trade_id) {
+            return DexError::TradeNotExisted.into();
         }
-        if payload.expiry > ctx.get_current_height() + self.validity.get()? {
-            return Err(DexError::OrderOverdue.into());
+        if payload.expiry > ctx.get_current_height() + self.validity.get() {
+            return DexError::OrderOverdue.into();
         }
 
         let order = Order {
@@ -128,35 +183,41 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
 
         match order.kind {
             OrderKind::Buy => {
+                let trade = check_get_or_return!(self.get_trade(trade_id.clone()));
+
                 let lock_asset_payload = ModifyAssetPayload {
-                    asset_id: self.trades.get(&trade_id)?.base_asset,
+                    asset_id: trade.base_asset,
                     user: ctx.get_caller(),
                     value: order.amount * order.price,
                 };
 
-                self.lock_asset(lock_asset_payload)?;
+                call_and_parse_service_response!(self, lock_asset, lock_asset_payload);
                 self.buy_orders.insert(
                     ctx.get_tx_hash().expect("tx hash should exist"),
                     order.clone(),
-                )?
+                )
             }
             OrderKind::Sell => {
+                let trade = check_get_or_return!(self.get_trade(trade_id.clone()));
+
                 let lock_asset_payload = ModifyAssetPayload {
-                    asset_id: self.trades.get(&trade_id)?.counter_party,
+                    asset_id: trade.counter_party,
                     user: ctx.get_caller(),
                     value: order.amount,
                 };
 
-                self.lock_asset(lock_asset_payload)?;
+                call_and_parse_service_response!(self, lock_asset, lock_asset_payload);
+
                 self.sell_orders.insert(
                     ctx.get_tx_hash().expect("tx hash should exist"),
                     order.clone(),
-                )?
+                )
             }
         };
 
-        let event_json = serde_json::to_string(&order).map_err(DexError::JsonParse)?;
-        ctx.emit_event(event_json)
+        let event_json = serde_json_string!(order);
+        ctx.emit_event("Order".to_owned(), event_json);
+        ServiceResponse::from_succeed(())
     }
 
     #[read]
@@ -164,21 +225,30 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
         &self,
         _ctx: ServiceContext,
         payload: GetOrderPayload,
-    ) -> ProtocolResult<GetOrderResponse> {
-        if let Ok(order) = self.buy_orders.get(&payload.tx_hash) {
-            return Ok(GetOrderResponse::from_order(&order, DealStatus::Dealing));
-        } else if let Ok(order) = self.sell_orders.get(&payload.tx_hash) {
-            return Ok(GetOrderResponse::from_order(&order, DealStatus::Dealing));
-        } else if let Ok(order) = self.history_orders.get(&payload.tx_hash) {
-            return Ok(GetOrderResponse::from_order(&order, DealStatus::Dealt));
+    ) -> ServiceResponse<GetOrderResponse> {
+        if let Some(order) = self.buy_orders.get(&payload.tx_hash) {
+            return ServiceResponse::from_succeed(GetOrderResponse::from_order(
+                &order,
+                DealStatus::Dealing,
+            ));
+        } else if let Some(order) = self.sell_orders.get(&payload.tx_hash) {
+            return ServiceResponse::from_succeed(GetOrderResponse::from_order(
+                &order,
+                DealStatus::Dealing,
+            ));
+        } else if let Some(order) = self.history_orders.get(&payload.tx_hash) {
+            return ServiceResponse::from_succeed(GetOrderResponse::from_order(
+                &order,
+                DealStatus::Dealt,
+            ));
         }
 
-        Err(DexError::OrderNotExisted.into())
+        DexError::OrderNotExisted.into()
     }
 
     #[hook_after]
-    fn match_and_deal(&mut self, params: &ExecutorParams) -> ProtocolResult<()> {
-        self.remove_expiry_orders(params.height)?;
+    fn match_and_deal(&mut self, params: &ExecutorParams) {
+        self.remove_expiry_orders(params.height);
 
         let mut buy_queue = Vec::<Order>::new();
         for (_, order) in self.buy_orders.iter() {
@@ -223,27 +293,33 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
                     buy_left,
                     current_buy.clone(),
                     current_sell.clone(),
-                )?;
-                sell_queue.push(next_sell);
+                );
+
+                if next_sell.is_error() {
+                    continue;
+                }
+                sell_queue.push(next_sell.succeed_data);
             } else if buy_left > sell_left {
                 let next_buy = self.settle_seller(
                     deal_price,
                     sell_left,
                     current_buy.clone(),
                     current_sell.clone(),
-                )?;
-                buy_queue.push(next_buy);
+                );
+                if next_buy.is_error() {
+                    continue;
+                }
+                buy_queue.push(next_buy.succeed_data);
             } else {
                 self.settle_both(
                     deal_price,
                     buy_left,
                     current_buy.clone(),
                     current_sell.clone(),
-                )?;
+                );
             }
         }
-
-        Ok(())
+        ()
     }
 
     fn settle_buyer(
@@ -252,54 +328,61 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
         deal_amount: u64,
         mut current_buy: Order,
         mut current_sell: Order,
-    ) -> ProtocolResult<Order> {
+    ) -> ServiceResponse<Order> {
         let trade_id = current_buy.trade_id.clone();
+        let trade = check_get_or_return!(self.get_trade(trade_id.clone()));
+
         let unlock_buyer = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.base_asset,
+            asset_id: trade.base_asset.clone(),
             user: current_buy.user.clone(),
             value: deal_amount * current_buy.price,
         };
-        self.unlock_asset(unlock_buyer)?;
+        call_and_parse_service_response!(self, unlock_asset, unlock_buyer);
 
         let add_buyer = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.counter_party,
+            asset_id: trade.counter_party.clone(),
             user: current_buy.user.clone(),
             value: deal_amount,
         };
-        self.add_value(add_buyer)?;
+        call_and_parse_service_response!(self, add_value, add_buyer);
 
         let sub_buyer = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.base_asset,
+            asset_id: trade.base_asset.clone(),
             user: current_buy.user.clone(),
             value: deal_amount * deal_price,
         };
-        self.sub_value(sub_buyer)?;
+
+        call_and_parse_service_response!(self, sub_value, sub_buyer);
 
         let unlock_seller = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.counter_party,
+            asset_id: trade.counter_party.clone(),
             user: current_sell.user.clone(),
             value: deal_amount,
         };
-        self.unlock_asset(unlock_seller)?;
+
+        call_and_parse_service_response!(self, unlock_asset, unlock_seller);
 
         let add_seller = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.base_asset,
+            asset_id: trade.base_asset,
             user: current_sell.user.clone(),
             value: deal_amount * deal_price,
         };
-        self.add_value(add_seller)?;
+
+        call_and_parse_service_response!(self, add_value, add_seller);
 
         let sub_seller = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.counter_party,
+            asset_id: trade.counter_party,
             user: current_sell.user.clone(),
             value: deal_amount,
         };
-        self.sub_value(sub_seller)?;
+
+        call_and_parse_service_response!(self, sub_value, sub_seller);
 
         let settle_deal = Deal {
             price: deal_price,
             amount: deal_amount,
         };
+
         current_buy.status = OrderStatus::Full;
         current_buy.deals.push(settle_deal.clone());
 
@@ -312,14 +395,14 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
         dealt_amount += settle_deal.amount;
         current_sell.status = OrderStatus::Partial(dealt_amount);
 
-        self.buy_orders.remove(&current_buy.tx_hash)?;
+        self.buy_orders.remove(&current_buy.tx_hash);
         self.history_orders
-            .insert(current_buy.tx_hash.clone(), current_buy)?;
+            .insert(current_buy.tx_hash.clone(), current_buy);
 
         self.sell_orders
-            .insert(current_sell.tx_hash.clone(), current_sell.clone())?;
+            .insert(current_sell.tx_hash.clone(), current_sell.clone());
 
-        Ok(current_sell)
+        ServiceResponse::from_succeed(current_sell)
     }
 
     fn settle_seller(
@@ -328,49 +411,57 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
         deal_amount: u64,
         mut current_buy: Order,
         mut current_sell: Order,
-    ) -> ProtocolResult<Order> {
+    ) -> ServiceResponse<Order> {
         let trade_id = current_buy.trade_id.clone();
+        let trade = check_get_or_return!(self.get_trade(trade_id.clone()));
+
         let unlock_seller = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.counter_party,
+            asset_id: trade.counter_party.clone(),
             user: current_sell.user.clone(),
             value: deal_amount,
         };
-        self.unlock_asset(unlock_seller)?;
+
+        call_and_parse_service_response!(self, unlock_asset, unlock_seller);
 
         let add_seller = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.base_asset,
+            asset_id: trade.base_asset.clone(),
             user: current_sell.user.clone(),
             value: deal_amount * deal_price,
         };
-        self.add_value(add_seller)?;
+
+        call_and_parse_service_response!(self, add_value, add_seller);
 
         let sub_seller = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.counter_party,
+            asset_id: trade.counter_party.clone(),
             user: current_sell.user.clone(),
             value: deal_amount,
         };
-        self.sub_value(sub_seller)?;
+
+        call_and_parse_service_response!(self, sub_value, sub_seller);
 
         let unlock_buyer = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.base_asset,
+            asset_id: trade.base_asset.clone(),
             user: current_buy.user.clone(),
             value: deal_amount * current_buy.price,
         };
-        self.unlock_asset(unlock_buyer)?;
+
+        call_and_parse_service_response!(self, unlock_asset, unlock_buyer);
 
         let add_buyer = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.counter_party,
+            asset_id: trade.counter_party,
             user: current_buy.user.clone(),
             value: deal_amount,
         };
-        self.add_value(add_buyer)?;
+
+        call_and_parse_service_response!(self, add_value, add_buyer);
 
         let sub_buyer = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.base_asset,
+            asset_id: trade.base_asset,
             user: current_buy.user.clone(),
             value: deal_amount * deal_price,
         };
-        self.sub_value(sub_buyer)?;
+
+        call_and_parse_service_response!(self, sub_value, sub_buyer);
 
         let settle_deal = Deal {
             price: deal_price,
@@ -388,14 +479,14 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
         dealt_amount += settle_deal.amount;
         current_buy.status = OrderStatus::Partial(dealt_amount);
 
-        self.sell_orders.remove(&current_sell.tx_hash)?;
+        self.sell_orders.remove(&current_sell.tx_hash);
         self.history_orders
-            .insert(current_sell.tx_hash.clone(), current_sell)?;
+            .insert(current_sell.tx_hash.clone(), current_sell);
 
         self.buy_orders
-            .insert(current_buy.tx_hash.clone(), current_buy.clone())?;
+            .insert(current_buy.tx_hash.clone(), current_buy.clone());
 
-        Ok(current_buy)
+        ServiceResponse::from_succeed(current_buy)
     }
 
     fn settle_both(
@@ -404,49 +495,51 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
         deal_amount: u64,
         mut current_buy: Order,
         mut current_sell: Order,
-    ) -> ProtocolResult<()> {
+    ) -> ServiceResponse<()> {
         let trade_id = current_buy.trade_id.clone();
+        let trade = check_get_or_return!(self.get_trade(trade_id.clone()));
+
         let unlock_seller = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.counter_party,
+            asset_id: trade.counter_party.clone(),
             user: current_sell.user.clone(),
             value: deal_amount,
         };
-        self.unlock_asset(unlock_seller)?;
+        call_and_parse_service_response!(self, unlock_asset, unlock_seller);
 
         let add_seller = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.base_asset,
+            asset_id: trade.base_asset.clone(),
             user: current_sell.user.clone(),
             value: deal_amount * deal_price,
         };
-        self.add_value(add_seller)?;
+        call_and_parse_service_response!(self, add_value, add_seller);
 
         let sub_seller = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.counter_party,
+            asset_id: trade.counter_party.clone(),
             user: current_sell.user.clone(),
             value: deal_amount,
         };
-        self.sub_value(sub_seller)?;
+        call_and_parse_service_response!(self, sub_value, sub_seller);
 
         let unlock_buyer = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.base_asset,
+            asset_id: trade.base_asset.clone(),
             user: current_buy.user.clone(),
             value: deal_amount * current_buy.price,
         };
-        self.unlock_asset(unlock_buyer)?;
+        call_and_parse_service_response!(self, unlock_asset, unlock_buyer);
 
         let add_buyer = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.counter_party,
+            asset_id: trade.counter_party,
             user: current_buy.user.clone(),
             value: deal_amount,
         };
-        self.add_value(add_buyer)?;
+        call_and_parse_service_response!(self, add_value, add_buyer);
 
         let sub_buyer = ModifyAssetPayload {
-            asset_id: self.trades.get(&trade_id)?.base_asset,
+            asset_id: trade.base_asset,
             user: current_buy.user.clone(),
             value: deal_amount * deal_price,
         };
-        self.sub_value(sub_buyer)?;
+        call_and_parse_service_response!(self, sub_value, sub_buyer);
 
         let settle_deal = Deal {
             price: deal_price,
@@ -458,97 +551,59 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
         current_buy.status = OrderStatus::Full;
         current_buy.deals.push(settle_deal.clone());
 
-        self.sell_orders.remove(&current_sell.tx_hash)?;
+        self.sell_orders.remove(&current_sell.tx_hash);
         self.history_orders
-            .insert(current_sell.tx_hash.clone(), current_sell)?;
+            .insert(current_sell.tx_hash.clone(), current_sell);
 
-        self.buy_orders.remove(&current_buy.tx_hash)?;
+        self.buy_orders.remove(&current_buy.tx_hash);
         self.history_orders
-            .insert(current_buy.tx_hash.clone(), current_buy)?;
+            .insert(current_buy.tx_hash.clone(), current_buy);
 
-        Ok(())
+        ServiceResponse::from_succeed(())
     }
 
-    fn lock_asset(&mut self, payload: ModifyAssetPayload) -> ProtocolResult<()> {
-        let lock_asset_payload = ModifyAssetPayload {
+    fn lock_asset(&mut self, payload: ModifyAssetPayload) -> ServiceResponse<()> {
+        let lock_asset_payload = ModifyBalancePayload {
             asset_id: payload.asset_id.clone(),
             user: payload.user.clone(),
             value: payload.value,
         };
 
-        let payload_str =
-            serde_json::to_string(&lock_asset_payload).map_err(DexError::JsonParse)?;
-
-        self.sdk.write(
-            &self.get_call_asset_ctx(),
-            Some(ADMISSION_TOKEN.clone()),
-            "asset",
-            "lock",
-            &payload_str,
-        )?;
-
-        Ok(())
+        self.asset
+            .lock(self.get_call_asset_ctx(), lock_asset_payload)
     }
 
-    fn unlock_asset(&mut self, payload: ModifyAssetPayload) -> ProtocolResult<()> {
-        let unlock_asset_payload = ModifyAssetPayload {
+    fn unlock_asset(&mut self, payload: ModifyAssetPayload) -> ServiceResponse<()> {
+        let unlock_asset_payload = ModifyBalancePayload {
             asset_id: payload.asset_id.clone(),
             user: payload.user.clone(),
             value: payload.value,
         };
 
-        let payload_str =
-            serde_json::to_string(&unlock_asset_payload).map_err(DexError::JsonParse)?;
-
-        self.sdk.write(
-            &self.get_call_asset_ctx(),
-            Some(ADMISSION_TOKEN.clone()),
-            "asset",
-            "unlock",
-            &payload_str,
-        )?;
-
-        Ok(())
+        self.asset
+            .unlock(self.get_call_asset_ctx(), unlock_asset_payload)
     }
 
-    fn add_value(&mut self, payload: ModifyAssetPayload) -> ProtocolResult<()> {
-        let add_asset_payload = ModifyAssetPayload {
+    fn add_value(&mut self, payload: ModifyAssetPayload) -> ServiceResponse<()> {
+        let add_asset_payload = ModifyBalancePayload {
             asset_id: payload.asset_id.clone(),
             user: payload.user.clone(),
             value: payload.value,
         };
 
-        let payload_str = serde_json::to_string(&add_asset_payload).map_err(DexError::JsonParse)?;
-
-        self.sdk.write(
-            &self.get_call_asset_ctx(),
-            Some(ADMISSION_TOKEN.clone()),
-            "asset",
-            "add_value",
-            &payload_str,
-        )?;
-
-        Ok(())
+        self.asset
+            .add_value(self.get_call_asset_ctx(), add_asset_payload)
     }
 
-    fn sub_value(&mut self, payload: ModifyAssetPayload) -> ProtocolResult<()> {
-        let sub_asset_payload = ModifyAssetPayload {
+    fn sub_value(&mut self, payload: ModifyAssetPayload) -> ServiceResponse<()> {
+        let sub_asset_payload = ModifyBalancePayload {
             asset_id: payload.asset_id.clone(),
             user: payload.user.clone(),
             value: payload.value,
         };
 
-        let payload_str = serde_json::to_string(&sub_asset_payload).map_err(DexError::JsonParse)?;
-
-        self.sdk.write(
-            &self.get_call_asset_ctx(),
-            Some(ADMISSION_TOKEN.clone()),
-            "asset",
-            "sub_value",
-            &payload_str,
-        )?;
-
-        Ok(())
+        self.asset
+            .sub_value(self.get_call_asset_ctx(), sub_asset_payload)
     }
 
     fn get_call_asset_ctx(&self) -> ServiceContext {
@@ -564,14 +619,14 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
             service_name: "".to_owned(),
             service_method: "".to_owned(),
             service_payload: "".to_owned(),
-            extra: None,
+            extra: Some(ADMISSION_TOKEN.clone()),
             events: Rc::new(RefCell::new(vec![])),
         };
 
         ServiceContext::new(params)
     }
 
-    fn remove_expiry_orders(&mut self, current_height: u64) -> ProtocolResult<()> {
+    fn remove_expiry_orders(&mut self, current_height: u64) {
         let mut expiry_buys = Vec::<(Hash, Order)>::new();
         for (tx_hash, order) in self.buy_orders.iter() {
             if order.expiry < current_height {
@@ -579,7 +634,7 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
             }
         }
         for (hash, order) in expiry_buys.iter() {
-            self.buy_orders.remove(hash)?;
+            self.buy_orders.remove(hash);
             let unlock_amount = match order.status {
                 OrderStatus::Fresh => order.amount,
                 OrderStatus::Partial(p) => order.amount - p,
@@ -587,14 +642,14 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
             };
             if unlock_amount != 0 {
                 let payload = ModifyAssetPayload {
-                    asset_id: self.trades.get(&order.trade_id)?.base_asset,
+                    asset_id: self.trades.get(&order.trade_id).unwrap().base_asset,
                     user: order.user.clone(),
                     value: unlock_amount,
                 };
-                self.unlock_asset(payload)?;
+                self.unlock_asset(payload);
             }
             self.history_orders
-                .insert(order.tx_hash.clone(), order.clone())?;
+                .insert(order.tx_hash.clone(), order.clone());
         }
 
         let mut expiry_sells = Vec::<(Hash, Order)>::new();
@@ -604,7 +659,7 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
             }
         }
         for (hash, order) in expiry_sells.iter() {
-            self.sell_orders.remove(hash)?;
+            self.sell_orders.remove(hash);
             let unlock_amount = match order.status {
                 OrderStatus::Fresh => order.amount,
                 OrderStatus::Partial(p) => order.amount - p,
@@ -612,21 +667,26 @@ impl<SDK: 'static + ServiceSDK> DexService<SDK> {
             };
             if unlock_amount != 0 {
                 let payload = ModifyAssetPayload {
-                    asset_id: self.trades.get(&order.trade_id)?.counter_party,
+                    asset_id: self.trades.get(&order.trade_id).unwrap().counter_party,
                     user: order.user.clone(),
                     value: unlock_amount,
                 };
-                self.unlock_asset(payload)?;
+                self.unlock_asset(payload);
             }
             self.history_orders
-                .insert(order.tx_hash.clone(), order.clone())?;
+                .insert(order.tx_hash.clone(), order.clone());
         }
+    }
 
-        Ok(())
+    fn get_trade(&self, trade_id: Hash) -> ServiceResponse<Trade> {
+        match self.trades.get(&trade_id) {
+            Some(trade) => ServiceResponse::from_succeed(trade),
+            None => DexError::TradeNotExisted.into(),
+        }
     }
 }
 
-#[derive(Debug, Display, From)]
+#[derive(Debug, Display)]
 pub enum DexError {
     #[display(fmt = "Parsing payload to json failed {:?}", _0)]
     JsonParse(serde_json::Error),
@@ -642,10 +702,21 @@ pub enum DexError {
     OrderNotExisted,
 }
 
-impl std::error::Error for DexError {}
+impl DexError {
+    fn code(&self) -> u64 {
+        match self {
+            DexError::JsonParse(_) => 201,
+            DexError::IllegalTrade { .. } => 202,
+            DexError::TradeExisted { .. } => 203,
+            DexError::TradeNotExisted { .. } => 204,
+            DexError::OrderOverdue => 205,
+            DexError::OrderNotExisted => 206,
+        }
+    }
+}
 
-impl From<DexError> for ProtocolError {
-    fn from(err: DexError) -> ProtocolError {
-        ProtocolError::new(ProtocolErrorKind::Service, Box::new(err))
+impl<T: Default> From<DexError> for ServiceResponse<T> {
+    fn from(err: DexError) -> ServiceResponse<T> {
+        ServiceResponse::from_error(err.code(), err.to_string())
     }
 }

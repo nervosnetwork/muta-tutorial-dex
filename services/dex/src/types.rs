@@ -12,7 +12,7 @@ pub struct GenesisPayload {
     pub order_validity: u64,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq, Default)]
 pub struct Trade {
     pub id: Hash,
     pub base_asset: Hash,
@@ -25,12 +25,12 @@ pub struct AddTradePayload {
     pub counter_party: Hash,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct GetTradesResponse {
     pub trades: Vec<Trade>,
 }
 
-#[derive(Deserialize, Serialize, Eq, PartialEq, Clone)]
+#[derive(Deserialize, Serialize, Eq, PartialEq, Clone, Default)]
 pub struct Order {
     pub trade_id: Hash,
     pub tx_hash: Hash,
@@ -50,11 +50,23 @@ pub enum OrderKind {
     Sell,
 }
 
+impl Default for OrderKind {
+    fn default() -> Self {
+        OrderKind::Buy
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq)]
 pub enum OrderStatus {
     Fresh,
     Partial(u64),
     Full,
+}
+
+impl Default for OrderStatus {
+    fn default() -> Self {
+        OrderStatus::Fresh
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq)]
@@ -67,6 +79,12 @@ pub struct Deal {
 pub enum DealStatus {
     Dealing,
     Dealt,
+}
+
+impl Default for DealStatus {
+    fn default() -> Self {
+        Self::Dealing
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -83,7 +101,7 @@ pub struct GetOrderPayload {
     pub tx_hash: Hash,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct GetOrderResponse {
     pub trade_id: Hash,
     pub tx_hash: Hash,

@@ -1,39 +1,59 @@
+use std::convert::From;
+
 use derive_more::{Display, From};
 
+use asset::AssetService;
+use dex::DexService;
+use metadata::MetadataService;
 use muta::MutaBuilder;
-use protocol::traits::{Service, ServiceMapping, ServiceSDK};
+use protocol::traits::{SDKFactory, Service, ServiceMapping, ServiceSDK};
 use protocol::{ProtocolError, ProtocolErrorKind, ProtocolResult};
 
 struct DefaultServiceMapping;
 
 impl ServiceMapping for DefaultServiceMapping {
-    fn get_service<SDK: 'static + ServiceSDK>(
+    fn get_service<SDK: 'static + ServiceSDK, Factory: SDKFactory<SDK>>(
         &self,
         name: &str,
-        sdk: SDK,
+        factory: &Factory,
     ) -> ProtocolResult<Box<dyn Service>> {
         let service = match name {
-            "metadata" => Box::new(metadata::MetadataService::new(sdk)?) as Box<dyn Service>,
-            "asset" => Box::new(asset::AssetService::new(sdk)?) as Box<dyn Service>,
-            "dex" => Box::new(dex::DexService::new(sdk)?) as Box<dyn Service>,
-            _ => {
-                return Err(MappingError::NotFoundService {
-                    service: name.to_owned(),
-                }
-                .into())
-            }
+            "asset" => Box::new(Self::new_asset(factory)?) as Box<dyn Service>,
+            "metadata" => Box::new(Self::new_metadata(factory)?) as Box<dyn Service>,
+            "dex" => Box::new(Self::new_dex(factory)?) as Box<dyn Service>,
+            _ => panic!("not found service"),
         };
 
         Ok(service)
     }
 
     fn list_service_name(&self) -> Vec<String> {
-        vec!["metadata".to_owned(), "asset".to_owned(), "dex".to_owned()]
+        vec!["asset".to_owned(), "metadata".to_owned(), "dex".to_owned()]
     }
 }
 
-#[tokio::main]
-async fn main() {
+impl DefaultServiceMapping {
+    fn new_asset<SDK: 'static + ServiceSDK, Factory: SDKFactory<SDK>>(
+        factory: &Factory,
+    ) -> ProtocolResult<AssetService<SDK>> {
+        Ok(AssetService::new(factory.get_sdk("asset")?))
+    }
+
+    fn new_metadata<SDK: 'static + ServiceSDK, Factory: SDKFactory<SDK>>(
+        factory: &Factory,
+    ) -> ProtocolResult<MetadataService<SDK>> {
+        Ok(MetadataService::new(factory.get_sdk("metadata")?))
+    }
+
+    fn new_dex<SDK: 'static + ServiceSDK, Factory: SDKFactory<SDK>>(
+        factory: &Factory,
+    ) -> ProtocolResult<DexService<SDK, AssetService<SDK>>> {
+        let asset = Self::new_asset(factory)?;
+        Ok(DexService::new(factory.get_sdk("dex")?, asset))
+    }
+}
+
+fn main() {
     let builder = MutaBuilder::new();
 
     // set configs
@@ -46,7 +66,7 @@ async fn main() {
 
     let muta = builer.build().unwrap();
 
-    muta.run().await.unwrap()
+    muta.run().unwrap()
 }
 
 #[derive(Debug, Display, From)]

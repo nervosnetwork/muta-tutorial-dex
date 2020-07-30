@@ -14,7 +14,7 @@ pub struct InitGenesisPayload {
     pub issuer: Address,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
 pub struct Asset {
     pub id: Hash,
     pub name: String,
@@ -41,13 +41,13 @@ pub struct GetAssetPayload {
     pub id: Hash,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct GetBalancePayload {
     pub asset_id: Hash,
     pub user: Address,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default)]
 pub struct GetBalanceResponse {
     pub asset_id: Hash,
     pub balance: Balance,

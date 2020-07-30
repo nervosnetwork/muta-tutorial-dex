@@ -1,13 +1,13 @@
 [package]
 name = "muta-tutorial-dex"
-version = "0.1.0"
-authors = [ "mkxbl <vincent@cryptape.com>" ]
+version = "0.2.0-alpha.1"
+authors = ["Muta Dev <muta@nervos.org>"]
 edition = "2018"
 
 [dependencies]
-muta = { git = "https://github.com/nervosnetwork/muta", rev = "417bfa85" }
-protocol = { git = "https://github.com/nervosnetwork/muta", rev = "417bfa85", package = "muta-protocol" }
-metadata = { git = "https://github.com/nervosnetwork/muta", rev = "417bfa85" }
+muta = { git = "https://github.com/nervosnetwork/muta", rev = "a3a79d7"}
+protocol = { git = "https://github.com/nervosnetwork/muta", rev = "a3a79d7", package = "muta-protocol" }
+metadata = { git = "https://github.com/nervosnetwork/muta", rev = "a3a79d7" }
 
 tokio = { version = "0.2", features = ["macros", "rt-core"]}
 derive_more = "0.15"
